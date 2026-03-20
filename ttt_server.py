@@ -12,6 +12,9 @@ def check_win(board, sym):
 def check_draw(board):
     return all(board[i] != ' ' for i in range(1,10))
 
+def board_str(board):
+    return ''.join(board[1:])  # 9 znakov, indexy 1-9
+
 def print_board(board):
     b = board
     print(f"""
@@ -21,8 +24,7 @@ def print_board(board):
 | {b[4]} | {b[5]} | {b[6]} |     | 4 | 5 | 6 |
 +---+---+---+     +---+---+---+
 | {b[1]} | {b[2]} | {b[3]} |     | 1 | 2 | 3 |
-+---+---+---+     +---+---+---+
-""")
++---+---+---+     +---+---+---+""")
 
 def send(conn, msg):
     conn.sendall((msg + '\n').encode())
@@ -37,7 +39,14 @@ def recv(conn):
     return data.decode().strip()
 
 def print_score(s1, s2, score):
-    print(f"[ SKORE: {s1}={score[s1]}  {s2}={score[s2]}  Remízy={score['draw']} ]\n")
+    print(f"\n[ SKORE: {s1}={score[s1]}  {s2}={score[s2]}  Remízy={score['draw']} ]")
+
+def push_state(conn, board, event, extra=''):
+    """Pošle klientovi aktuálny stav + udalosť."""
+    msg = f"STATE:{board_str(board)}:{event}"
+    if extra:
+        msg += f":{extra}"
+    send(conn, msg)
 
 # ── ŠTART ──────────────────────────────────────────────
 clear()
@@ -62,7 +71,6 @@ print("Čakám na pripojenie...\n")
 conn, addr = server_sock.accept()
 print(f"Hráč 2 pripojený z {addr[0]}\n")
 
-# Vyber symbol
 while True:
     print("Vyber si symbol (X alebo O):")
     s1 = input().strip().upper()
@@ -71,26 +79,28 @@ while True:
         break
     print("Neplatný vstup.")
 
-# Informuj klienta o jeho symbole
 send(conn, f"SETUP:{s2}")
 
 score = {s1: 0, s2: 0, 'draw': 0}
-first = s1   # kto začína toto kolo
+first = s1
 
 try:
     while True:
-        # ── NOVÁ HRA ──
         board = [' '] * 10
         current = first
 
-        while True:
-            clear()
-            print_score(s1, s2, score)
-            print(f"Ty: {s1}   Hráč 2: {s2}   Na rade: {current}\n")
-            print_board(board)
+        # Hneď pošli klientovi počiatočný stav + kto začína
+        push_state(conn, board, "TURN", current)
 
+        while True:
             if current == s1:
-                # ── Môj ťah ──
+                # Môj ťah — zobraz board a pýtaj vstup
+                clear()
+                print_score(s1, s2, score)
+                print(f"\nTy: {s1}   Hráč 2: {s2}   Na rade: {s1} (TY)\n")
+                print_board(board)
+                print()
+
                 while True:
                     print(f"Tvoj ťah ({s1}). Zadaj číslo (1-9):")
                     vstup = input().strip()
@@ -103,67 +113,71 @@ try:
                         print("Neplatný vstup!")
 
                 board[pos] = s1
-                # Pošli klientovi: hráč urobil ťah na pos, teraz je na rade current_next
-                next_player = s2  # po mojom ťahu je na rade s2
 
                 if check_win(board, s1):
                     score[s1] += 1
-                    send(conn, f"STATE:{''.join(board[1:])}:WIN:{s1}")
+                    push_state(conn, board, "WIN", s1)
                     clear()
                     print_score(s1, s2, score)
+                    print(f"\nTy: {s1}   Hráč 2: {s2}\n")
                     print_board(board)
-                    print("🎉 Vyhral si!\n")
+                    print("\n🎉 Vyhral si!\n")
                     break
                 elif check_draw(board):
                     score['draw'] += 1
-                    send(conn, f"STATE:{''.join(board[1:])}:DRAW")
+                    push_state(conn, board, "DRAW")
                     clear()
                     print_score(s1, s2, score)
                     print_board(board)
-                    print("Remíza!\n")
+                    print("\nRemíza!\n")
                     break
                 else:
-                    send(conn, f"STATE:{''.join(board[1:])}:TURN:{s2}")
                     current = s2
+                    push_state(conn, board, "TURN", current)
 
             else:
-                # ── Čakám na ťah hráča 2 ──
-                print(f"Čakám na ťah hráča 2 ({s2})...")
+                # Čakám na ťah hráča 2
+                clear()
+                print_score(s1, s2, score)
+                print(f"\nTy: {s1}   Hráč 2: {s2}   Na rade: {s2} (čakám...)\n")
+                print_board(board)
+                print()
+
                 msg = recv(conn)
-                # Klient posiela iba: "MOVE:pos"
                 if not msg.startswith("MOVE:"):
                     raise ConnectionError(f"Neočakávaná správa: {msg}")
                 pos = int(msg.split(":")[1])
 
                 if board[pos] != ' ':
-                    # Toto by nemalo nastať, ale pre istotu
-                    send(conn, f"STATE:{''.join(board[1:])}:TURN:{s2}")
+                    # Obsadené — pošli znova rovnaký stav
+                    push_state(conn, board, "TURN", s2)
                     continue
 
                 board[pos] = s2
 
                 if check_win(board, s2):
                     score[s2] += 1
-                    send(conn, f"STATE:{''.join(board[1:])}:WIN:{s2}")
+                    push_state(conn, board, "WIN", s2)
                     clear()
                     print_score(s1, s2, score)
                     print_board(board)
-                    print(f"Hráč 2 ({s2}) vyhral.\n")
+                    print(f"\nHráč 2 ({s2}) vyhral.\n")
                     break
                 elif check_draw(board):
                     score['draw'] += 1
-                    send(conn, f"STATE:{''.join(board[1:])}:DRAW")
+                    push_state(conn, board, "DRAW")
                     clear()
                     print_score(s1, s2, score)
                     print_board(board)
-                    print("Remíza!\n")
+                    print("\nRemíza!\n")
                     break
                 else:
-                    send(conn, f"STATE:{''.join(board[1:])}:TURN:{s1}")
                     current = s1
+                    push_state(conn, board, "TURN", current)
 
         # ── REMATCH ──
         print_score(s1, s2, score)
+        print()
         while True:
             print("Chceš hrať znova? (Y/N):")
             ans = input().strip().upper()
@@ -171,19 +185,17 @@ try:
                 break
             print("Zadaj Y alebo N.")
 
+        send(conn, f"REMATCH:{ans}")
+
         if ans == 'N':
-            send(conn, "REMATCH:N")
             print("Dovidenia!")
             break
 
-        # Pošli klientovi že chceme hrať
-        send(conn, "REMATCH:Y")
-        # Počkaj na jeho odpoveď
         print("Čakám na odpoveď hráča 2...")
         msg = recv(conn)
         if msg == "REMATCH:Y":
             print("Hráč 2 súhlasí! Začíname...\n")
-            first = s2 if first == s1 else s1  # striedanie kto začína
+            first = s2 if first == s1 else s1
         else:
             print("Hráč 2 odmietol. Koniec hry.")
             break
