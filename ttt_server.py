@@ -58,8 +58,15 @@ server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 server.bind((HOST, PORT))
 server.listen(1)
 
-# Zisti lokálnu IP pre info
-local_ip = socket.gethostbyname(socket.gethostname())
+# Zisti skutočnú sieťovú IP (nie 127.0.0.1)
+try:
+    temp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    temp_sock.connect(("8.8.8.8", 80))
+    local_ip = temp_sock.getsockname()[0]
+    temp_sock.close()
+except Exception:
+    local_ip = "nepodarilo sa zistiť"
+
 print(f"Čakám na pripojenie hráča 2...")
 print(f"Tvoja IP adresa (povedz ju hráčovi 2): {local_ip}")
 print(f"Port: {PORT}\n")
